@@ -298,6 +298,7 @@ static class Settings
     public static int HotkeyMods = 0;
     public static bool HotkeyEnabled = true;
     public static bool ShowDesktops = true;
+    public static bool Compact = false;
     public static Point? Position;
     public static readonly Dictionary<string, string> DesktopNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
@@ -331,6 +332,7 @@ static class Settings
             HotkeyEnabled = Bool(hk, "enabled", HotkeyEnabled);
         }
         ShowDesktops = Bool(root, "showDesktops", ShowDesktops);
+        Compact = Bool(root, "compact", Compact);
         var pos = Obj(root, "position");
         if (pos != null && pos.ContainsKey("x") && pos.ContainsKey("y"))
             Position = new Point(Int(pos, "x", 0), Int(pos, "y", 0));
@@ -398,6 +400,7 @@ static class Settings
         sb.Append("  \"hotkey\": { \"vk\": ").Append(HotkeyVk).Append(", \"mods\": ").Append(HotkeyMods)
           .Append(", \"enabled\": ").Append(HotkeyEnabled ? "true" : "false").Append(" },\n");
         sb.Append("  \"showDesktops\": ").Append(ShowDesktops ? "true" : "false").Append(",\n");
+        sb.Append("  \"compact\": ").Append(Compact ? "true" : "false").Append(",\n");
         if (Position.HasValue)
             sb.Append("  \"position\": { \"x\": ").Append(Position.Value.X).Append(", \"y\": ").Append(Position.Value.Y).Append(" },\n");
         sb.Append("  \"desktops\": {");
@@ -441,20 +444,50 @@ class FloatForm : Form
     readonly ToolStripMenuItem autostartItem;
     readonly Native.LowLevelKeyboardProc hookProc;
     readonly uint ownPid = (uint)Process.GetCurrentProcess().Id;
-    readonly Font gearFont = new Font("Segoe MDL2 Assets", 11f * Program.Dpi);
-    readonly Font nameFont = new Font("Segoe UI Semibold", 10.5f * Program.Dpi);
-    readonly Font nameBoldFont = new Font("Segoe UI Semibold", 10.5f * Program.Dpi);
-    readonly Font numFont = new Font("Segoe UI", 9f * Program.Dpi, FontStyle.Bold);
+    Font gearFont, nameFont, nameBoldFont, numFont, editFont;
+    readonly ToolStripMenuItem compactItem;
     readonly ToolStripMenuItem desktopsItem;
     readonly ToolStripMenuItem renameItem;
-    const int PanelW = 220, CompactW = 104, Pad = 6, HeaderH = 46, GearSize = 34, RowH = 36, RowGap = 2;
+    static bool C { get { return Settings.Compact; } }
+    static int PanelW { get { return C ? 186 : 220; } }
+    static int CompactW { get { return C ? 106 : 138; } }
+    static int Pad { get { return C ? 4 : 6; } }
+    static int HeaderH { get { return C ? 32 : 46; } }
+    static int GearSize { get { return C ? 26 : 34; } }
+    static int RowH { get { return C ? 27 : 36; } }
+    static int RowGap { get { return C ? 1 : 2; } }
+    static int RowsTop { get { return Pad + HeaderH + (C ? 3 : 11); } }
+    static int BadgeSize { get { return C ? 18 : 22; } }
+    static int FlagW { get { return C ? 30 : 42; } }
+    static int FlagH { get { return C ? 20 : 28; } }
+    static int Inset { get { return C ? 6 : 8; } }
+
+    void UpdateFonts()
+    {
+        float k = C ? 0.86f : 1f;
+        foreach (var f in new[] { gearFont, nameFont, nameBoldFont, numFont, editFont })
+            if (f != null) f.Dispose();
+        gearFont = new Font("Segoe MDL2 Assets", 11f * k * Program.Dpi);
+        nameFont = new Font("Segoe UI Semibold", 10.5f * k * Program.Dpi);
+        nameBoldFont = new Font("Segoe UI Semibold", 10.5f * k * Program.Dpi);
+        numFont = new Font("Segoe UI", 9f * k * Program.Dpi, FontStyle.Bold);
+        editFont = new Font("Segoe MDL2 Assets", 9f * k * Program.Dpi);
+    }
+
+    void ToggleCompact()
+    {
+        Settings.Compact = !Settings.Compact;
+        Settings.Save();
+        compactItem.Checked = Settings.Compact;
+        UpdateFonts();
+        Relayout();
+    }
     const int ShadowSide = 14, ShadowTop = 12, ShadowBottom = 16, PanelRadius = 14, RowRadius = 9;
     Guid[] desktopIds = new Guid[0];
     int desktopCount = 1;
     int desktopIndex;
     int hover = -1;
     int menuRow = -1;
-    readonly Font editFont = new Font("Segoe MDL2 Assets", 9f * Program.Dpi);
     readonly Native.IVirtualDesktopManager vdm;
     Point baseLocation;
     readonly Native.LowLevelKeyboardProc mouseProc;
@@ -475,6 +508,7 @@ class FloatForm : Form
     public FloatForm()
     {
         Settings.Load();
+        UpdateFonts();
 
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = true;
@@ -498,6 +532,9 @@ class FloatForm : Form
         desktopsItem = new ToolStripMenuItem("Кнопки рабочих столов", null, (s, e) => ToggleDesktops());
         desktopsItem.Checked = Settings.ShowDesktops;
         menu.Items.Add(desktopsItem);
+        compactItem = new ToolStripMenuItem("Компактный режим", null, (s, e) => ToggleCompact());
+        compactItem.Checked = Settings.Compact;
+        menu.Items.Add(compactItem);
         menu.Items.Add(autostartItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Выход", null, (s, e) => Close());
@@ -538,7 +575,6 @@ class FloatForm : Form
 
     int PanelWidth { get { return ButtonsVisible ? PanelW : CompactW; } }
 
-    const int RowsTop = Pad + HeaderH + 4 + 1 + 6;
 
     int PanelHeight
     {
@@ -560,9 +596,14 @@ class FloatForm : Form
         get { return new Rectangle(Px(ShadowSide + PanelWidth - Pad - GearSize), Px(ShadowTop + Pad + (HeaderH - GearSize) / 2f), Px(GearSize), Px(GearSize)); }
     }
 
+    Rectangle ModeRect
+    {
+        get { return new Rectangle(Px(ShadowSide + PanelWidth - Pad - GearSize * 2), Px(ShadowTop + Pad + (HeaderH - GearSize) / 2f), Px(GearSize), Px(GearSize)); }
+    }
+
     Rectangle LangRect
     {
-        get { return new Rectangle(Px(ShadowSide + Pad), Px(ShadowTop + Pad), Px(PanelWidth - Pad * 2 - GearSize - 4), Px(HeaderH)); }
+        get { return new Rectangle(Px(ShadowSide + Pad), Px(ShadowTop + Pad), Px(PanelWidth - Pad * 2 - GearSize * 2 - 4), Px(HeaderH)); }
     }
 
     Rectangle RowRect(int i)
@@ -573,21 +614,21 @@ class FloatForm : Form
     Rectangle BadgeRect(int i)
     {
         var r = RowRect(i);
-        int size = Px(22);
-        return new Rectangle(r.X + Px(8), r.Y + (r.Height - size) / 2, size, size);
+        int size = Px(BadgeSize);
+        return new Rectangle(r.X + Px(Inset), r.Y + (r.Height - size) / 2, size, size);
     }
 
     Rectangle EditRect(int i)
     {
         var r = RowRect(i);
-        int size = Px(26);
-        return new Rectangle(r.Right - Px(5) - size, r.Y + (r.Height - size) / 2, size, size);
+        int size = Px(C ? 22 : 26);
+        return new Rectangle(r.Right - Px(C ? 3 : 5) - size, r.Y + (r.Height - size) / 2, size, size);
     }
 
     Rectangle NameRect(int i)
     {
         var r = RowRect(i);
-        int x = BadgeRect(i).Right + Px(10);
+        int x = BadgeRect(i).Right + Px(C ? 8 : 10);
         return new Rectangle(x, r.Y, EditRect(i).X - Px(4) - x, r.Height);
     }
 
@@ -603,6 +644,7 @@ class FloatForm : Form
     int HitTest(Point p)
     {
         if (GearRect.Contains(p)) return -2;
+        if (ModeRect.Contains(p)) return -4;
         if (LangRect.Contains(p)) return -3;
         if (ButtonsVisible)
             for (int i = 0; i < desktopCount; i++)
@@ -822,13 +864,15 @@ class FloatForm : Form
                 using (var near = new StringFormat(StringFormatFlags.NoWrap) { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter })
                 {
                     var lr = LangRect;
-                    var flagRect = new RectangleF(lr.X + Px(8), lr.Y + (lr.Height - Px(28)) / 2f, Px(42), Px(28));
+                    var flagRect = new RectangleF(lr.X + Px(Inset), lr.Y + (lr.Height - Px(FlagH)) / 2f, Px(FlagW), Px(FlagH));
                     if (!Flags.Draw(g, region, flagRect, 3f * Program.Dpi))
-                        using (var f = new Font(Font.FontFamily, Font.Size * Program.Dpi, Font.Style))
-                            g.DrawString(lang, f, Brushes.White, new RectangleF(lr.X + Px(8), lr.Y, lr.Width - Px(8), lr.Height), near);
+                        using (var f = new Font(Font.FontFamily, Font.Size * (C ? 0.75f : 1f) * Program.Dpi, Font.Style))
+                            g.DrawString(lang, f, Brushes.White, new RectangleF(lr.X + Px(Inset), lr.Y, lr.Width - Px(Inset), lr.Height), near);
 
                     using (var gb = new SolidBrush(Color.FromArgb(hover == -2 ? 255 : 215, Color.White)))
                         g.DrawString("\uE713", gearFont, gb, GearRect, center);
+                    using (var mb = new SolidBrush(Color.FromArgb(hover == -4 ? 255 : 215, Color.White)))
+                        g.DrawString(C ? "\uE740" : "\uE73F", gearFont, mb, ModeRect, center);
 
                     if (ButtonsVisible)
                     {
@@ -974,7 +1018,10 @@ class FloatForm : Form
                     Settings.HotkeyVk = dlg.Vk;
                     Settings.HotkeyMods = dlg.Mods;
                     Settings.HotkeyEnabled = dlg.HotkeyOn;
-                    Settings.SaveHotkey();
+                    Settings.ShowDesktops = dlg.DesktopsOn;
+                    Settings.Save();
+                    desktopsItem.Checked = Settings.ShowDesktops;
+                    Relayout();
                 }
             }
         }
@@ -1048,6 +1095,7 @@ class FloatForm : Form
         pressed = false;
         int hit = HitTest(e.Location);
         if (hit == -2) OpenSettings();
+        else if (hit == -4) ToggleCompact();
         else if (hit == -3) SwitchLanguage();
         else if (hit <= EditHitBase) RenameDesktop(EditHitBase - hit);
         else if (hit >= 0 && hit != desktopIndex) SwitchToDesktop(hit);
@@ -1124,6 +1172,64 @@ class FloatForm : Form
     }
 }
 
+static class SmoothText
+{
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    class LOGFONT
+    {
+        public int lfHeight, lfWidth, lfEscapement, lfOrientation, lfWeight;
+        public byte lfItalic, lfUnderline, lfStrikeOut, lfCharSet, lfOutPrecision, lfClipPrecision, lfQuality, lfPitchAndFamily;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string lfFaceName;
+    }
+
+    [DllImport("gdi32.dll", CharSet = CharSet.Unicode)] static extern IntPtr CreateFontIndirect(LOGFONT lf);
+    [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr obj);
+    [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+    public static void UseSystemStyle(Control root)
+    {
+        foreach (Control c in root.Controls)
+        {
+            var label = c as Label;
+            if (label != null) label.FlatStyle = FlatStyle.System;
+            var button = c as ButtonBase;
+            if (button != null) button.FlatStyle = FlatStyle.System;
+            UseSystemStyle(c);
+        }
+    }
+
+    public static void Apply(Form form)
+    {
+        var fonts = new System.Collections.Generic.Dictionary<Font, IntPtr>();
+        ApplyTo(form, fonts);
+        form.FormClosed += (s, e) =>
+        {
+            foreach (var h in fonts.Values) DeleteObject(h);
+        };
+    }
+
+    static void ApplyTo(Control root, System.Collections.Generic.Dictionary<Font, IntPtr> fonts)
+    {
+        foreach (Control c in root.Controls)
+        {
+            if (c.IsHandleCreated && (c is Label || c is ButtonBase || c is TextBoxBase))
+            {
+                IntPtr h;
+                if (!fonts.TryGetValue(c.Font, out h))
+                {
+                    var lf = new LOGFONT();
+                    c.Font.ToLogFont(lf);
+                    lf.lfQuality = 4;
+                    h = CreateFontIndirect(lf);
+                    fonts[c.Font] = h;
+                }
+                SendMessage(c.Handle, 0x0030, h, new IntPtr(1));
+            }
+            ApplyTo(c, fonts);
+        }
+    }
+}
+
 class RenameDialog : Form
 {
     readonly TextBox box = new TextBox();
@@ -1176,6 +1282,13 @@ class RenameDialog : Form
         table.Controls.Add(buttons, 0, 3);
         Controls.Add(table);
         ActiveControl = box;
+        SmoothText.UseSystemStyle(this);
+    }
+
+    protected override void OnLoad(EventArgs e)
+    {
+        base.OnLoad(e);
+        SmoothText.Apply(this);
     }
 
     protected override void OnShown(EventArgs e)
@@ -1344,6 +1457,9 @@ class SettingsForm : Form
 
     readonly HotkeyBox box = new HotkeyBox();
     readonly CheckBox enabledBox = new CheckBox();
+    readonly CheckBox desktopsBox = new CheckBox();
+
+    public bool DesktopsOn { get { return desktopsBox.Checked; } }
 
     public SettingsForm()
     {
@@ -1393,7 +1509,13 @@ class SettingsForm : Form
         enabledBox.Text = "Горячая клавиша включена";
         enabledBox.Checked = Settings.HotkeyEnabled;
         enabledBox.AutoSize = true;
-        enabledBox.Margin = new Padding(0, 0, 0, 16);
+        enabledBox.Margin = new Padding(0, 0, 0, 18);
+
+        var viewTitle = new Label { Text = "Вид панели", AutoSize = true, Margin = new Padding(0, 0, 0, 6) };
+        desktopsBox.Text = "Кнопки рабочих столов";
+        desktopsBox.Checked = Settings.ShowDesktops;
+        desktopsBox.AutoSize = true;
+        desktopsBox.Margin = new Padding(0, 0, 0, 16);
 
         var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, AutoSize = true, MinimumSize = new Size(96, 0), Margin = new Padding(8, 0, 0, 0) };
         var cancel = new Button { Text = "Отмена", DialogResult = DialogResult.Cancel, AutoSize = true, MinimumSize = new Size(96, 0), Margin = new Padding(8, 0, 0, 0) };
@@ -1415,10 +1537,21 @@ class SettingsForm : Form
         table.SetColumnSpan(hint, 2);
         table.Controls.Add(enabledBox, 0, 3);
         table.SetColumnSpan(enabledBox, 2);
-        table.Controls.Add(buttons, 0, 4);
+        table.Controls.Add(viewTitle, 0, 4);
+        table.SetColumnSpan(viewTitle, 2);
+        table.Controls.Add(desktopsBox, 0, 5);
+        table.SetColumnSpan(desktopsBox, 2);
+        table.Controls.Add(buttons, 0, 6);
         table.SetColumnSpan(buttons, 2);
         Controls.Add(table);
         ActiveControl = ok;
+        SmoothText.UseSystemStyle(this);
+    }
+
+    protected override void OnLoad(EventArgs e)
+    {
+        base.OnLoad(e);
+        SmoothText.Apply(this);
     }
 
     void OnBoxKeyDown(object sender, KeyEventArgs e)
